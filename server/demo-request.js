@@ -168,10 +168,51 @@ function smtpConfiguration(env) {
   };
 }
 
+function redactSensitiveValues(value, env) {
+  if (value === undefined || value === null) return undefined;
+
+  let safeValue = String(value).replace(/[\r\n\t]+/g, " ").slice(0, 2000);
+  const sensitiveValues = [
+    env.SMTP_PASSWORD,
+    env.SMTP_USER,
+    env.SMTP_FROM,
+    env.DEMO_RECIPIENT_EMAIL,
+  ]
+    .filter((secret) => typeof secret === "string" && secret.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  for (const secret of sensitiveValues) {
+    const escapedSecret = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    safeValue = safeValue.replace(new RegExp(escapedSecret, "gi"), "[REDACTED]");
+  }
+
+  return safeValue
+    .replace(
+      /\b(password|passwd|secret|access[_ -]?token|credential)\b\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1=[REDACTED]",
+    )
+    .replace(/\bAUTH\s+(?:PLAIN|LOGIN)\s+[A-Za-z0-9+/=]+/gi, "AUTH [REDACTED]");
+}
+
+function getSafeErrorDetails(error, env) {
+  const details = {
+    name: redactSensitiveValues(error?.name || "Error", env),
+    message: redactSensitiveValues(error?.message || String(error), env),
+  };
+
+  for (const key of ["code", "responseCode", "command", "response"]) {
+    const value = redactSensitiveValues(error?.[key], env);
+    if (value !== undefined) details[key] = value;
+  }
+
+  return details;
+}
+
 export function createDemoRequestHandler({
   env = process.env,
   createTransport = (options) => nodemailer.createTransport(options),
   now = () => new Date(),
+  logError = (message, details) => console.error(message, JSON.stringify(details)),
 } = {}) {
   return async (request, response) => {
     const requestUrl = new URL(request.url, "http://localhost");
@@ -232,7 +273,10 @@ export function createDemoRequestHandler({
         return;
       }
 
-      console.error("Demo request email delivery failed:", error?.code || error?.name || "unknown error");
+      logError(
+        "Demo request email delivery failed:",
+        getSafeErrorDetails(error, env),
+      );
       sendJson(response, 502, {
         error: "We couldn't send your request right now. Please try again.",
       });

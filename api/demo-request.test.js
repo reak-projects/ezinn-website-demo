@@ -116,6 +116,51 @@ test("Vercel function returns validation failures without sending", async () => 
   });
 });
 
+test("Vercel function logs SMTP failure details while redacting credentials", async () => {
+  const logEntries = [];
+  const smtpError = Object.assign(
+    new Error(`Authentication failed for ${testEnv.SMTP_USER}; password=${testEnv.SMTP_PASSWORD}`),
+    {
+      code: "EAUTH",
+      responseCode: 535,
+      command: "AUTH PLAIN",
+      response: `535 Authentication failed for ${testEnv.SMTP_USER}: ${testEnv.SMTP_PASSWORD}`,
+    },
+  );
+  const handler = createVercelDemoRequestHandler({
+    env: testEnv,
+    createTransport: () => ({
+      sendMail: async () => {
+        throw smtpError;
+      },
+    }),
+    logError: (...entry) => logEntries.push(entry),
+  });
+
+  await withVercelApi(handler, async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validRequest),
+    });
+
+    assert.equal(response.status, 502);
+  });
+
+  assert.equal(logEntries.length, 1);
+  assert.equal(logEntries[0][0], "Demo request email delivery failed:");
+  const loggedDetails = logEntries[0][1];
+  assert.equal(loggedDetails.code, "EAUTH");
+  assert.equal(loggedDetails.responseCode, "535");
+  assert.equal(loggedDetails.command, "AUTH PLAIN");
+  assert.match(loggedDetails.message, /Authentication failed/);
+  assert.match(loggedDetails.response, /535 Authentication failed/);
+  const serializedLog = JSON.stringify(loggedDetails);
+  assert.doesNotMatch(serializedLog, new RegExp(testEnv.SMTP_PASSWORD));
+  assert.doesNotMatch(serializedLog, new RegExp(testEnv.SMTP_USER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(serializedLog, /\[REDACTED\]/);
+});
+
 test("Vercel function responds to requests through its default export", async () => {
   await withVercelApi(vercelDemoRequest, async (url) => {
     const response = await fetch(url, {
