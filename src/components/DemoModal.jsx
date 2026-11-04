@@ -12,10 +12,13 @@ export default function DemoModal({ isOpen, onClose }) {
   });
   const [submitted, setSubmitted] = useState(false);
   const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState("");
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    setSubmissionError("");
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: "" }));
     }
@@ -35,29 +38,54 @@ export default function DemoModal({ isOpen, onClose }) {
     return newErrors;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     const newErrors = validateForm();
     
     if (Object.keys(newErrors).length === 0) {
-      // Form is valid - show success state
-      console.log("Demo request submitted:", formData);
-      setSubmitted(true);
-      // Reset form after 3 seconds
-      setTimeout(() => {
-        setFormData({
-          fullName: "",
-          email: "",
-          company: "",
-          phone: "",
-          properties: "",
-          message: ""
+      setIsSubmitting(true);
+      setSubmissionError("");
+
+      try {
+        const response = await fetch("/api/demo-request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData),
         });
-        setSubmitted(false);
-        onClose();
-      }, 3000);
+
+        if (!response.ok) {
+          const result = await response.json().catch(() => null);
+          setSubmissionError(
+            typeof result?.error === "string"
+              ? result.error
+              : "We couldn't send your request. Please try again."
+          );
+          return;
+        }
+
+        setSubmitted(true);
+        setTimeout(() => {
+          setFormData({
+            fullName: "",
+            email: "",
+            company: "",
+            phone: "",
+            properties: "",
+            message: ""
+          });
+          setSubmitted(false);
+          onClose();
+        }, 3000);
+      } catch {
+        setSubmissionError("We couldn't send your request. Please check your connection and try again.");
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
       setErrors(newErrors);
+      setSubmissionError("");
     }
   };
 
@@ -75,7 +103,7 @@ export default function DemoModal({ isOpen, onClose }) {
               <p>Connect with our hospitality team to explore EZinn self-service kiosks for your property.</p>
             </div>
 
-            <form onSubmit={handleSubmit} className="demo-form">
+            <form onSubmit={handleSubmit} className="demo-form" aria-busy={isSubmitting}>
               <div className="form-group">
                 <label htmlFor="fullName">Full Name *</label>
                 <input
@@ -161,8 +189,17 @@ export default function DemoModal({ isOpen, onClose }) {
                 ></textarea>
               </div>
 
-              <button type="submit" className="btn btn-primary" style={{ width: "100%", marginTop: "8px" }}>
-                Submit Request
+              {submissionError && (
+                <p className="demo-submit-error" role="alert">{submissionError}</p>
+              )}
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ width: "100%", marginTop: "8px" }}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? "Sending..." : "Submit Request"}
               </button>
             </form>
           </>
@@ -171,7 +208,7 @@ export default function DemoModal({ isOpen, onClose }) {
             <div className="success-icon">✓</div>
             <h3>Thank You!</h3>
             <p>Your demo request has been submitted successfully. Our team will contact you within 24 hours.</p>
-            <p className="email-confirmation">Confirmation details have been sent to <strong>{formData.email}</strong></p>
+            <p className="email-confirmation">We'll use this email to contact you: <strong>{formData.email}</strong></p>
           </div>
         )}
       </div>
